@@ -1,0 +1,39 @@
+name: Sync upstream
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.repository_owner == 'UnrealXu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Merge latest upstream default branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ github.repository }}
+          TARGET_BRANCH: 'main'
+        run: |
+          set -euo pipefail
+          metadata=$(gh api "repos/$TARGET")
+          upstream=$(jq -er '.parent.full_name' <<< "$metadata")
+          source_branch=$(jq -er '.parent.default_branch' <<< "$metadata")
+          source_sha=$(gh api "repos/$upstream/commits/$source_branch" --jq '.sha')
+          gh api "repos/$TARGET/compare/$source_sha...$TARGET_BRANCH" > before.json
+          gh api --method POST "repos/$TARGET/merges" -f base="$TARGET_BRANCH" -f head="$source_sha" -f commit_message="Sync upstream $upstream:$source_branch" > result.json
+          gh api "repos/$TARGET/compare/$source_sha...$TARGET_BRANCH" > after.json
+          jq -e '.behind_by == 0' after.json > /dev/null
+          {
+            echo '### Upstream sync verified'
+            echo "Source: $upstream ($source_branch)"
+            echo "Target: $TARGET ($TARGET_BRANCH)"
+            echo "Upstream commit: $source_sha"
+            echo "New upstream commits merged: $(jq -r '.behind_by' before.json)"
+            echo "Remaining upstream commits: $(jq -r '.behind_by' after.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
